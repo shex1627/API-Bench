@@ -7,6 +7,7 @@ collection storage, assertions, and history.
 
 from .assertion_engine import AssertionEngine
 from .collection_store import CollectionStore
+from .env_persistence import EnvironmentPersistence
 from .history_manager import HistoryManager
 from .http_client import HttpClient
 from .variable_store import VariableStore
@@ -14,6 +15,7 @@ from .variable_store import VariableStore
 __all__ = [
     "AssertionEngine",
     "CollectionStore",
+    "EnvironmentPersistence",
     "HistoryManager",
     "HttpClient",
     "VariableStore",

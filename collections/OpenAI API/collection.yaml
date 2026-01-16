@@ -1,0 +1,10 @@
+name: OpenAI API
+description: OpenAI GPT API requests
+base_url: https://api.openai.com
+auth: null
+variables: {}
+folders:
+- name: Chat
+  requests:
+  - Quick Prompt
+- name: Models

@@ -6,9 +6,11 @@ Handles variable substitution in requests.
 """
 
 import re
+from pathlib import Path
 from typing import Any
 
 from ..types import Environment, EnvironmentVariable, VariableScope
+from .env_persistence import EnvironmentPersistence
 
 
 class VariableStore:
@@ -21,11 +23,50 @@ class VariableStore:
     3. Global variables
     """
 
-    def __init__(self) -> None:
+    def __init__(self, storage_dir: str | Path | None = None) -> None:
         self._global_vars: dict[str, EnvironmentVariable] = {}
         self._collection_vars: dict[str, dict[str, EnvironmentVariable]] = {}
         self._environments: dict[str, Environment] = {}
         self._active_environment: str | None = None
+        self._persistence: EnvironmentPersistence | None = None
+
+        # Initialize persistence if storage directory provided
+        if storage_dir:
+            self._persistence = EnvironmentPersistence(storage_dir)
+            self._load_from_disk()
+
+    # =========================================================================
+    # Persistence
+    # =========================================================================
+
+    def _load_from_disk(self) -> None:
+        """Load all environments from disk."""
+        if not self._persistence:
+            return
+
+        # Load all environments
+        self._environments = self._persistence.load_all_environments()
+
+        # Load active environment
+        self._active_environment = self._persistence.load_active_environment()
+
+    def _save_to_disk(self, env_name: str | None = None) -> None:
+        """Save environment(s) to disk."""
+        if not self._persistence:
+            return
+
+        if env_name:
+            # Save specific environment
+            env = self._environments.get(env_name)
+            if env:
+                self._persistence.save_environment(env)
+        else:
+            # Save all environments
+            for env in self._environments.values():
+                self._persistence.save_environment(env)
+
+        # Save active environment
+        self._persistence.save_active_environment(self._active_environment)
 
     # =========================================================================
     # Environment Management
@@ -39,7 +80,7 @@ class VariableStore:
     ) -> Environment:
         """Create a new environment."""
         env_vars: dict[str, EnvironmentVariable] = {}
-        
+
         if variables:
             for key, value in variables.items():
                 if isinstance(value, str):
@@ -49,6 +90,7 @@ class VariableStore:
 
         env = Environment(name=name, variables=env_vars, description=description)
         self._environments[name] = env
+        self._save_to_disk(name)  # Auto-save
         return env
 
     def get_environment(self, name: str) -> Environment | None:
@@ -64,6 +106,7 @@ class VariableStore:
         previous = self._active_environment
         if name is None or name in self._environments:
             self._active_environment = name
+            self._save_to_disk()  # Auto-save active environment
         else:
             raise ValueError(f"Environment '{name}' not found")
         return previous
@@ -78,6 +121,9 @@ class VariableStore:
             del self._environments[name]
             if self._active_environment == name:
                 self._active_environment = None
+            if self._persistence:
+                self._persistence.delete_environment(name)
+            self._save_to_disk()  # Save active environment state
             return True
         return False
 
@@ -114,6 +160,7 @@ class VariableStore:
             if env_name not in self._environments:
                 raise ValueError(f"Environment '{env_name}' not found")
             self._environments[env_name].variables[name] = var
+            self._save_to_disk(env_name)  # Auto-save when environment var changes
 
     def get_variable(
         self,
@@ -198,6 +245,7 @@ class VariableStore:
             if env_name and env_name in self._environments:
                 if name in self._environments[env_name].variables:
                     del self._environments[env_name].variables[name]
+                    self._save_to_disk(env_name)  # Auto-save
                     return True
 
         return False

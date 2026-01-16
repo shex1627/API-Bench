@@ -53,9 +53,10 @@ from .types import (
 
 COLLECTIONS_DIR = os.environ.get("API_WORKBENCH_COLLECTIONS", "collections")
 HISTORY_DB = os.environ.get("API_WORKBENCH_HISTORY_DB", "history.db")
+ENVIRONMENTS_DIR = os.environ.get("API_WORKBENCH_ENVIRONMENTS", "environments")
 DEFAULT_ENV = os.environ.get("API_WORKBENCH_DEFAULT_ENV")
 
-variable_store = VariableStore()
+variable_store = VariableStore(storage_dir=ENVIRONMENTS_DIR)
 http_client = HttpClient(variable_store)
 collection_store = CollectionStore(COLLECTIONS_DIR)
 assertion_engine = AssertionEngine()

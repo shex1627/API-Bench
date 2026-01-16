@@ -256,7 +256,10 @@ search_tools(query="run tests", category="collection")
 |----------|-------------|---------|
 | `API_WORKBENCH_COLLECTIONS` | Collections directory | `./collections` |
 | `API_WORKBENCH_HISTORY_DB` | History database path | `./history.db` |
+| `API_WORKBENCH_ENVIRONMENTS` | Environments storage directory | `./environments` |
 | `API_WORKBENCH_DEFAULT_ENV` | Default environment | None |
+
+**Note**: Environments are automatically persisted to disk. Secret variables are encrypted using machine-specific keys for security.
 
 ## Collection Storage Format
 

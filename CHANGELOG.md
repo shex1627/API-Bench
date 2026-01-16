@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Supports nested objects and arrays in request body
   - Example: `variable_overrides={"model": "claude-3-opus", "prompt": "Custom prompt"}`
 
+- **Environment Persistence**: Environments and variables are now automatically saved to disk and restored on server restart
+  - Auto-save on every environment/variable change
+  - Secret variables are encrypted using machine-specific keys (AES-256 via Fernet)
+  - Environments stored as JSON files in configurable directory
+  - Active environment selection persists across restarts
+  - Configure storage location with `API_WORKBENCH_ENVIRONMENTS` environment variable
+  - Encryption keys derived from machine ID + username for consistency
+
 ### Fixed
 - Fixed database path issue when running through Claude Desktop by adding `API_WORKBENCH_HISTORY_DB` environment variable support
 
