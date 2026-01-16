@@ -1,0 +1,6 @@
+name: List Models
+method: GET
+url: https://api.anthropic.com/v1/models
+headers:
+  anthropic-version: '2023-06-01'
+  x-api-key: '{{ANTHROPIC_API_KEY}}'

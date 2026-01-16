@@ -1,0 +1,15 @@
+name: Quick Prompt
+method: POST
+url: https://api.anthropic.com/v1/messages
+headers:
+  x-api-key: '{{ANTHROPIC_API_KEY}}'
+  Content-Type: application/json
+  anthropic-version: '2023-06-01'
+body:
+  type: json
+  content:
+    model: '{{CLAUDE_MODEL}}'
+    messages:
+    - role: user
+      content: '{{CLAUDE_PROMPT}}'
+    max_tokens: 4096
