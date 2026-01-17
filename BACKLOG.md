@@ -363,7 +363,78 @@
   - Assertions for MCP response format
 - **Use Case**: Quickly start testing any MCP server
 
-## Priority 12: Developer Experience
+## Priority 12: Collection-Based Prompts & Learning
+
+### API Hints & Skills System
+- **Description**: Collection-based prompt/hints system that provides lessons and best practices for handling different APIs, similar to Claude's skills system
+- **Features**:
+  - `prompt_create` - Create a new learning/prompt for a collection
+  - `prompt_read` - Read prompts/hints for a collection
+  - `prompt_update` - Update an existing prompt
+  - `prompt_delete` - Remove a prompt
+  - `prompt_list` - List all prompts across collections or for a specific collection
+  - Store prompts as YAML files alongside collections
+  - Tag prompts by category (authentication, pagination, error handling, rate limiting, etc.)
+  - Link prompts to specific requests or endpoints
+- **Use Case**:
+  - "Always use exponential backoff when hitting rate limits on this API"
+  - "This API requires a specific date format: YYYY-MM-DDTHH:mm:ssZ"
+  - "For pagination, use cursor-based approach with the `next_page_token` field"
+  - "Authentication tokens expire after 1 hour, refresh proactively"
+- **Example Structure**:
+  ```yaml
+  # collections/Anthropic API/prompts/rate-limiting.yaml
+  name: Rate Limit Handling
+  category: error-handling
+  applies_to:
+    - requests/*
+  content: |
+    When receiving a 429 Too Many Requests error:
+    1. Check the `retry-after` header for wait time
+    2. Implement exponential backoff starting at 1 second
+    3. Max retry attempts: 3
+    4. Log rate limit events for monitoring
+  examples:
+    - scenario: "Rate limited on messages endpoint"
+      solution: "Wait for retry-after seconds, then retry with same request"
+  ```
+- **Acceptance Criteria**:
+  ```python
+  # CRUD operations for prompts
+  prompt_create(
+      collection="Anthropic API",
+      name="Rate Limit Handling",
+      category="error-handling",
+      content="When receiving 429...",
+      applies_to=["requests/*"]
+  )
+
+  prompt_list(collection="Anthropic API")
+  # Returns: list of all prompts for the collection
+
+  prompt_read(collection="Anthropic API", name="Rate Limit Handling")
+  # Returns: full prompt content
+  ```
+
+### Learning from Request History
+- **Description**: Auto-generate prompts/learnings from successful request patterns
+- **Features**:
+  - Analyze request history for patterns
+  - Suggest new prompts based on common fixes or retries
+  - Learn from user corrections (e.g., "this header was missing")
+- **Use Case**: Build institutional knowledge about API quirks automatically
+
+### Prompt Inheritance
+- **Description**: Prompts can be inherited or overridden at different levels
+- **Features**:
+  - Global prompts (apply to all collections)
+  - Collection-level prompts
+  - Folder-level prompts
+  - Request-level prompts (most specific)
+  - Inheritance chain with override capability
+- **Use Case**: "All APIs should handle 5xx errors with retry" (global) but "This specific endpoint should not retry" (request-level override)
+
+## Priority 13: Developer Experience (was 12)
 
 ### Request Templates
 - **Description**: Pre-built request templates for common patterns
@@ -401,7 +472,7 @@
   - Check for broken variable references
   - Suggest best practices
 
-## Priority 13: Quality of Life
+## Priority 14: Quality of Life (was 13)
 
 ### Request History Enhancements
 - **Description**: Better history management
@@ -411,6 +482,37 @@
   - `history_search` - Full-text search in history
   - Pin favorite requests in history
   - History retention policies (auto-delete old entries)
+
+### ✅ Save Request & Response to File (COMPLETED)
+- **Description**: Export request and response data to files for documentation or debugging
+- **Implementation**: Added as optional parameters to `request_send` tool
+- **Features**:
+  - `save_to_file` parameter - Save to file path or True for auto-generated filename
+  - `save_format` parameter - Supports JSON, YAML, Markdown, HTTP archive (.har)
+  - Auto-generate filenames with timestamp and sanitized URL
+  - Streaming support - Captures all SSE events for LLM APIs
+  - Security - Masks sensitive headers (Authorization, API keys) in Markdown format
+- **Usage**:
+  ```python
+  # Basic save
+  request_send(
+      method="POST",
+      url="https://api.example.com/users",
+      body={"name": "John"},
+      save_to_file=True,  # Auto-generates filename
+      save_format="json"
+  )
+
+  # Streaming + save for LLM debugging
+  request_send(
+      method="POST",
+      url="https://api.anthropic.com/v1/messages",
+      body={"model": "claude-3-5-sonnet", "stream": true},
+      stream=True,  # Capture all SSE events
+      save_to_file="llm_debug.json",
+      save_format="json"
+  )
+  ```
 
 ### Favorites/Bookmarks
 - **Description**: Quick access to frequently used requests
@@ -444,6 +546,7 @@
 4. Dynamic variables (`{{$timestamp}}`, etc.)
 5. Full-text search across collections
 6. MCP server discovery and testing
+7. Collection-based prompts/hints CRUD (simple YAML storage)
 
 ### High Impact Features
 1. OAuth 2.0 flow
@@ -452,6 +555,7 @@
 4. Pre-request & post-response scripts
 5. Data-driven testing
 6. MCP server integration
+7. Collection-based prompts & learning system (skills for APIs)
 
 ### Nice to Have (Lower Priority)
 1. Mock servers

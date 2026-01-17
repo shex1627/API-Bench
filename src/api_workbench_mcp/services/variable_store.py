@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..types import Environment, EnvironmentVariable, VariableScope
+from .dynamic_variables import DynamicVariables
 from .env_persistence import EnvironmentPersistence
 
 
@@ -265,7 +266,11 @@ class VariableStore:
         Substitute {{variable}} placeholders in text.
 
         Variables are resolved in order of precedence:
-        overrides > environment > collection > global
+        1. Overrides (passed at runtime)
+        2. Dynamic variables (starting with $, e.g., {{$timestamp}})
+        3. Environment variables
+        4. Collection variables
+        5. Global variables
         """
         pattern = r"\{\{([^}]+)\}\}"
 
@@ -275,6 +280,12 @@ class VariableStore:
             # Check overrides first
             if overrides and var_name in overrides:
                 return overrides[var_name]
+
+            # Check for dynamic variables (starting with $)
+            if var_name.startswith("$"):
+                dynamic_value = DynamicVariables.get_value(var_name)
+                if dynamic_value is not None:
+                    return dynamic_value
 
             value = self.get_variable(var_name, collection, environment)
             if value is not None:
@@ -327,6 +338,20 @@ class VariableStore:
                 result.append(item)
 
         return result
+
+    # =========================================================================
+    # Dynamic Variables
+    # =========================================================================
+
+    @staticmethod
+    def list_dynamic_variables() -> list[str]:
+        """List all available dynamic variables (e.g., $timestamp, $guid)."""
+        return DynamicVariables.list_variables()
+
+    @staticmethod
+    def get_dynamic_variable_value(name: str) -> str | None:
+        """Get a generated value for a dynamic variable."""
+        return DynamicVariables.get_value(name)
 
     # =========================================================================
     # Serialization
