@@ -63,3 +63,12 @@ dmypy.json
 *.tmp
 tmp/
 temp/
+
+# API Workbench - User data (contains secrets)
+environments/*.json
+environments/.state.json
+exports/
+
+# Setup scripts (local only)
+setup_*.sh
+setup_*.py
