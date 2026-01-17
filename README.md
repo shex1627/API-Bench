@@ -12,6 +12,8 @@ A comprehensive MCP (Model Context Protocol) server for API testing - an open so
 - 📜 **History** - Track and replay past requests
 - 📥 **Import/Export** - Postman collections, OpenAPI specs
 - 🔄 **Variable Substitution** - Use `{{variables}}` in URLs, headers, body
+- 📡 **Streaming Support** - Capture all SSE events for LLM APIs (Anthropic, OpenAI, etc.)
+- 💾 **Save to File** - Export request/response to JSON, YAML, Markdown, or HAR formats
 
 ## Design Philosophy
 
@@ -73,7 +75,56 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 claude mcp add api-workbench -- api-workbench-mcp
 ```
 
+## Quick Start for AI Agents
+
+When Claude is asked to call an API, it should:
+
+1. **First, discover what's available**: Call `get_api_context()` to see all collections, environments, and configured APIs
+2. **Then, make the request**: Use `request_send()` with the discovered information
+
+```python
+# Step 1: Get context (do this FIRST!)
+context = get_api_context()
+# Returns: environments (with variables), collections (with request schemas), active env
+
+# Step 2: Make the API call using discovered info
+request_send(
+    method="POST",
+    url="{{baseUrl}}/endpoint",  # Variables from active environment
+    headers={"x-api-key": "{{apiKey}}"},  # Variable substitution
+    body={"param": "value"}
+)
+```
+
 ## Tools Reference
+
+### Discovery Tools
+
+#### `get_api_context`
+**Call this FIRST** when working with APIs. Returns complete overview of:
+- All environments and their variables (secrets masked)
+- All collections and their available requests
+- Request schemas and authentication methods
+- Active environment
+
+```python
+# Get full context
+get_api_context()
+
+# Get detailed schema for a specific collection
+get_api_context(collection="Anthropic API")
+
+# Include recent API call history
+get_api_context(include_history=True)
+```
+
+### MCP Resources
+
+Claude can also read these resources directly:
+
+- `api://overview` - Complete overview of all configuration
+- `api://collections/{name}` - Detailed collection schema
+- `api://environments/{name}` - Environment variables (masked)
 
 ### Request Tools
 
@@ -112,6 +163,34 @@ request_send(
         "model": "claude-3-opus-20240229",
         "prompt": "What is the capital of France?"
     }
+)
+
+# Streaming for LLM APIs - captures all events
+request_send(
+    method="POST",
+    url="https://api.anthropic.com/v1/messages",
+    headers={"x-api-key": "{{apiKey}}", "anthropic-version": "2023-06-01"},
+    body={"model": "claude-3-5-sonnet", "stream": true, "max_tokens": 100},
+    stream=True  # Captures all SSE events
+)
+
+# Save request/response to file for debugging
+request_send(
+    method="POST",
+    url="{{baseUrl}}/users",
+    body={"name": "John"},
+    save_to_file=True,  # Auto-generates filename
+    save_format="json"  # json, yaml, markdown, har
+)
+
+# Streaming + save for LLM debugging
+request_send(
+    method="POST",
+    url="https://api.anthropic.com/v1/messages",
+    body={"model": "claude-3-5-sonnet", "stream": true, "max_tokens": 100},
+    stream=True,
+    save_to_file="llm_debug.json",
+    save_format="json"  # Saves both events and final response
 )
 ```
 
@@ -257,9 +336,37 @@ search_tools(query="run tests", category="collection")
 | `API_WORKBENCH_COLLECTIONS` | Collections directory | `./collections` |
 | `API_WORKBENCH_HISTORY_DB` | History database path | `./history.db` |
 | `API_WORKBENCH_ENVIRONMENTS` | Environments storage directory | `./environments` |
+| `API_WORKBENCH_EXPORTS` | Saved responses directory | `./exports` |
 | `API_WORKBENCH_DEFAULT_ENV` | Default environment | None |
+| `API_WORKBENCH_HINTS` | Context hints config file | `./config/hints.yaml` |
 
-**Note**: Environments are automatically persisted to disk. Secret variables are encrypted using machine-specific keys for security.
+**Notes**:
+- Environments are automatically persisted to disk. Secret variables are encrypted using machine-specific keys for security.
+- Context hints can be customized by editing `config/hints.yaml` to guide Claude Desktop's API usage patterns.
+
+### Customizing Context Hints
+
+The `get_api_context()` tool returns helpful hints to guide Claude Desktop. These hints are loaded from `config/hints.yaml` and can be customized:
+
+```yaml
+# config/hints.yaml
+calling_apis: "Use request_send with method, url, headers, and body..."
+variable_overrides: "Use variable_overrides to change model, prompt, or any variable per-request..."
+streaming: "For LLM APIs, use stream=True to capture all SSE events..."
+
+examples:
+  anthropic: |
+    request_send(
+      method="POST",
+      url="{{anthropic_base_url}}/messages",
+      variable_overrides={"model": "claude-opus-4.5", "prompt": "Your question"}
+    )
+```
+
+Edit this file to:
+- Add custom hints for your specific APIs
+- Include examples for common workflows
+- Guide Claude Desktop's behavior when calling your APIs
 
 ## Collection Storage Format
 
