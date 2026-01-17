@@ -1,3 +1,0 @@
-name: HTTPBin - Headers Echo
-method: GET
-url: https://httpbin.org/headers

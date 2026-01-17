@@ -1,0 +1,13 @@
+name: LLM APIs
+description: Collection of LLM API requests for Anthropic and OpenAI
+base_url: null
+auth: null
+variables: {}
+folders:
+- name: Anthropic
+  requests:
+  - Claude Chat
+- name: OpenAI
+  requests:
+  - GPT Chat (Fixed)
+  - GPT Chat (GPT-5.2)

@@ -1,0 +1,14 @@
+name: GPT Chat (GPT-5.2)
+method: POST
+url: '{{openai_base_url}}/chat/completions'
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{openai_api_key}}
+body:
+  type: json
+  content:
+    model: '{{openai_model}}'
+    messages:
+    - role: user
+      content: '{{prompt}}'
+    max_completion_tokens: 4096

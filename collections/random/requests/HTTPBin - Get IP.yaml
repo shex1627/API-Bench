@@ -1,3 +1,0 @@
-name: HTTPBin - Get IP
-method: GET
-url: https://httpbin.org/ip
