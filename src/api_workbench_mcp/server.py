@@ -8,11 +8,14 @@ Designed following Anthropic's best practices for building effective tools for a
 import asyncio
 import json
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+import yaml
 from mcp.server.fastmcp import FastMCP
 
 from .services import (
@@ -54,7 +57,9 @@ from .types import (
 COLLECTIONS_DIR = os.environ.get("API_WORKBENCH_COLLECTIONS", "collections")
 HISTORY_DB = os.environ.get("API_WORKBENCH_HISTORY_DB", "history.db")
 ENVIRONMENTS_DIR = os.environ.get("API_WORKBENCH_ENVIRONMENTS", "environments")
+EXPORTS_DIR = os.environ.get("API_WORKBENCH_EXPORTS", "exports")
 DEFAULT_ENV = os.environ.get("API_WORKBENCH_DEFAULT_ENV")
+HINTS_CONFIG = os.environ.get("API_WORKBENCH_HINTS", "config/hints.yaml")
 
 variable_store = VariableStore(storage_dir=ENVIRONMENTS_DIR)
 http_client = HttpClient(variable_store)
@@ -64,7 +69,548 @@ history_manager = HistoryManager(HISTORY_DB)
 
 _start_time = time.time()
 
+# Load hints configuration
+def _load_hints() -> dict[str, Any]:
+    """Load hints from YAML config file."""
+    hints_path = Path(HINTS_CONFIG)
+
+    # Try relative to project root
+    if not hints_path.is_absolute():
+        # Get project root (3 levels up from this file)
+        project_root = Path(__file__).parent.parent.parent
+        hints_path = project_root / hints_path
+
+    if hints_path.exists():
+        try:
+            with open(hints_path, "r") as f:
+                return yaml.safe_load(f) or {}
+        except Exception as e:
+            print(f"Warning: Could not load hints config: {e}")
+            return {}
+
+    # Return default hints if file not found
+    return {
+        "calling_apis": "Use request_send with method, url, headers, and body.",
+        "environments": "Active environment is '{active_env}'.",
+        "collections": "Use collection requests by name.",
+        "authentication": "Most APIs use headers like 'x-api-key' or 'Authorization: Bearer {{token}}'"
+    }
+
+_hints_config = _load_hints()
+
 mcp = FastMCP("API Workbench")
+
+
+# =============================================================================
+# File Export Helper Functions
+# =============================================================================
+
+
+def _generate_filename(method: str, url: str, format: str) -> str:
+    """Generate a sanitized filename from method and URL."""
+    # Parse URL to get domain and path
+    parsed = urlparse(url)
+    domain = parsed.netloc.replace(".", "_")
+    path = parsed.path.replace("/", "_")
+
+    # Combine and sanitize
+    url_part = f"{domain}{path}"
+    url_part = re.sub(r'[^a-zA-Z0-9_]', '_', url_part)
+    url_part = re.sub(r'_+', '_', url_part)  # Replace multiple underscores
+    url_part = url_part[:50]  # Limit length
+
+    # Generate timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Determine file extension
+    ext = format if format in ("json", "yaml", "md", "har") else "json"
+    if format == "markdown":
+        ext = "md"
+
+    return f"{method}_{url_part}_{timestamp}.{ext}"
+
+
+def _export_as_json(data: dict[str, Any]) -> str:
+    """Export data as formatted JSON."""
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+
+def _export_as_yaml(data: dict[str, Any]) -> str:
+    """Export data as YAML."""
+    return yaml.safe_dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def _export_as_markdown(data: dict[str, Any]) -> str:
+    """Export data as human-readable Markdown."""
+    metadata = data.get("metadata", {})
+    request = data.get("request", {})
+    response = data.get("response", {})
+
+    lines = ["# API Request/Response", ""]
+
+    # Metadata
+    if metadata:
+        exported_at = metadata.get("exported_at", "")
+        environment = metadata.get("environment", "")
+        lines.append(f"**Exported:** {exported_at}")
+        if environment:
+            lines.append(f"**Environment:** {environment}")
+        lines.append("")
+
+    # Request
+    lines.append("## Request")
+    lines.append("")
+    lines.append(f"**Method:** {request.get('method', 'N/A')}")
+    lines.append(f"**URL:** {request.get('url', 'N/A')}")
+    lines.append("")
+
+    if request.get("headers"):
+        lines.append("### Headers")
+        for key, value in request["headers"].items():
+            # Mask sensitive headers
+            if key.lower() in ("authorization", "x-api-key", "cookie"):
+                value = "***"
+            lines.append(f"- {key}: {value}")
+        lines.append("")
+
+    if request.get("body") is not None:
+        lines.append("### Body")
+        lines.append("```json")
+        if isinstance(request["body"], (dict, list)):
+            lines.append(json.dumps(request["body"], indent=2))
+        else:
+            lines.append(str(request["body"]))
+        lines.append("```")
+        lines.append("")
+
+    # Response
+    lines.append("## Response")
+    lines.append("")
+    status = response.get("status", "N/A")
+    status_text = response.get("status_text", "")
+    lines.append(f"**Status:** {status} {status_text}")
+    lines.append(f"**Duration:** {response.get('duration', 0)}ms")
+    lines.append("")
+
+    if response.get("headers"):
+        lines.append("### Headers")
+        for key, value in response["headers"].items():
+            lines.append(f"- {key}: {value}")
+        lines.append("")
+
+    if response.get("body") is not None:
+        lines.append("### Body")
+        lines.append("```json")
+        if isinstance(response["body"], (dict, list)):
+            lines.append(json.dumps(response["body"], indent=2))
+        else:
+            lines.append(str(response["body"]))
+        lines.append("```")
+        lines.append("")
+
+    # Streaming events (if present)
+    if response.get("streaming"):
+        streaming = response["streaming"]
+        lines.append("## Streaming Events")
+        lines.append("")
+        lines.append(f"**Event Count:** {streaming.get('event_count', 0)}")
+        lines.append(f"**First Chunk:** {streaming.get('first_chunk_time_ms', 0)}ms")
+        lines.append(f"**Last Chunk:** {streaming.get('last_chunk_time_ms', 0)}ms")
+        lines.append("")
+        lines.append("### Events")
+        lines.append("```")
+        for event in streaming.get("events", []):
+            lines.append(event)
+        lines.append("```")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _export_as_har(data: dict[str, Any]) -> str:
+    """Export data as HAR (HTTP Archive) 1.2 format."""
+    metadata = data.get("metadata", {})
+    request = data.get("request", {})
+    response = data.get("response", {})
+
+    # Build HAR structure
+    har = {
+        "log": {
+            "version": "1.2",
+            "creator": {
+                "name": "API Workbench MCP",
+                "version": "0.1.0"
+            },
+            "entries": [
+                {
+                    "startedDateTime": metadata.get("exported_at", datetime.now().isoformat()),
+                    "time": response.get("duration", 0),
+                    "request": {
+                        "method": request.get("method", "GET"),
+                        "url": request.get("url", ""),
+                        "httpVersion": "HTTP/1.1",
+                        "headers": [
+                            {"name": k, "value": v}
+                            for k, v in request.get("headers", {}).items()
+                        ],
+                        "queryString": [],
+                        "cookies": [],
+                        "headersSize": -1,
+                        "bodySize": len(json.dumps(request.get("body", ""))) if request.get("body") else 0,
+                    },
+                    "response": {
+                        "status": response.get("status", 0),
+                        "statusText": response.get("status_text", ""),
+                        "httpVersion": "HTTP/1.1",
+                        "headers": [
+                            {"name": k, "value": v}
+                            for k, v in response.get("headers", {}).items()
+                        ],
+                        "cookies": [],
+                        "content": {
+                            "size": response.get("size", 0),
+                            "mimeType": response.get("headers", {}).get("content-type", "application/json"),
+                            "text": json.dumps(response.get("body", "")) if isinstance(response.get("body"), (dict, list)) else str(response.get("body", ""))
+                        },
+                        "redirectURL": "",
+                        "headersSize": -1,
+                        "bodySize": response.get("size", 0),
+                    },
+                    "cache": {},
+                    "timings": {
+                        "wait": response.get("duration", 0),
+                        "receive": 0
+                    }
+                }
+            ]
+        }
+    }
+
+    return json.dumps(har, indent=2, ensure_ascii=False)
+
+
+def _save_request_response_to_file(
+    request_data: dict[str, Any],
+    response_data: dict[str, Any],
+    output_path: str | bool,
+    format: str,
+    environment: str | None,
+) -> dict[str, str]:
+    """
+    Save request/response to file.
+
+    Args:
+        request_data: Request details (method, url, headers, body)
+        response_data: Response details (status, headers, body, streaming, etc.)
+        output_path: File path or True for auto-generated filename
+        format: Export format (json, yaml, markdown, har)
+        environment: Environment name (for metadata)
+
+    Returns:
+        Dict with "saved_to" path and "format"
+    """
+    # Prepare complete data structure
+    export_data = {
+        "metadata": {
+            "exported_at": datetime.now().isoformat(),
+            "environment": environment,
+        },
+        "request": request_data,
+        "response": response_data,
+    }
+
+    # Generate filename if needed
+    if isinstance(output_path, bool) and output_path:
+        filename = _generate_filename(
+            request_data.get("method", "GET"),
+            request_data.get("url", ""),
+            format
+        )
+        # Use EXPORTS_DIR for auto-generated filenames
+        file_path = Path(EXPORTS_DIR) / filename
+    else:
+        filename = str(output_path)
+        file_path = Path(filename)
+        # If relative path, use EXPORTS_DIR as base
+        if not file_path.is_absolute():
+            file_path = Path(EXPORTS_DIR) / filename
+
+    # Ensure parent directory exists
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Export to requested format
+    if format == "json":
+        content = _export_as_json(export_data)
+    elif format == "yaml":
+        content = _export_as_yaml(export_data)
+    elif format == "markdown":
+        content = _export_as_markdown(export_data)
+    elif format == "har":
+        content = _export_as_har(export_data)
+    else:
+        # Default to JSON
+        content = _export_as_json(export_data)
+
+    # Write to file
+    file_path.write_text(content, encoding="utf-8")
+
+    return {
+        "saved_to": str(file_path.absolute()),
+        "format": format
+    }
+
+
+# =============================================================================
+# MCP Resources - For Discovery
+# =============================================================================
+
+
+@mcp.resource("api://overview")
+def resource_overview() -> str:
+    """
+    Get complete overview of API Workbench configuration.
+
+    Returns a comprehensive summary of:
+    - Available collections and their requests
+    - Configured environments and variables
+    - Active environment
+    - Common API patterns
+    """
+    collections = collection_store.list_collections()
+    environments = variable_store.list_environments()
+    active_env = variable_store.get_active_environment()
+
+    overview = {
+        "active_environment": active_env or "None",
+        "environments": [],
+        "collections": [],
+        "quick_start": {
+            "anthropic_api": "Use 'Anthropic API' collection with {{apiKey}} variable",
+            "openai_api": "Use 'OpenAI API' collection with {{openaiKey}} variable",
+            "custom_api": "Create collection with collection_create, then add requests"
+        }
+    }
+
+    # List environments with variables
+    for env_name in environments:
+        env = variable_store.get_environment(env_name)
+        if env:
+            vars_masked = variable_store.get_all_variables(environment=env_name, mask_secrets=True)
+            overview["environments"].append({
+                "name": env.name,
+                "description": env.description,
+                "variables": list(vars_masked.keys()) if vars_masked else []
+            })
+
+    # List collections with requests
+    for coll_name in collections:
+        coll = collection_store.get_collection(coll_name)
+        if coll:
+            requests = []
+            for folder in coll.folders:
+                for req_ref in folder.requests:
+                    req = collection_store.get_request(coll_name, req_ref)
+                    if req:
+                        requests.append({
+                            "name": req.name,
+                            "method": req.method.value,
+                            "url": req.url,
+                            "folder": folder.name
+                        })
+
+            overview["collections"].append({
+                "name": coll.name,
+                "description": coll.description,
+                "base_url": coll.base_url,
+                "requests": requests
+            })
+
+    return json.dumps(overview, indent=2)
+
+
+@mcp.resource("api://collections/{collection_name}")
+def resource_collection_detail(collection_name: str) -> str:
+    """
+    Get detailed information about a specific collection including request schemas.
+    """
+    coll = collection_store.get_collection(collection_name)
+    if not coll:
+        return json.dumps({"error": f"Collection '{collection_name}' not found"})
+
+    details = {
+        "name": coll.name,
+        "description": coll.description,
+        "base_url": coll.base_url,
+        "folders": []
+    }
+
+    for folder in coll.folders:
+        folder_data = {
+            "name": folder.name,
+            "requests": []
+        }
+
+        for req_ref in folder.requests:
+            req = collection_store.get_request(collection_name, req_ref)
+            if req:
+                folder_data["requests"].append({
+                    "name": req.name,
+                    "method": req.method.value,
+                    "url": req.url,
+                    "headers": req.headers,
+                    "body_example": req.body if req.body else None,
+                    "description": req.description
+                })
+
+        details["folders"].append(folder_data)
+
+    return json.dumps(details, indent=2)
+
+
+@mcp.resource("api://environments/{env_name}")
+def resource_environment_vars(env_name: str) -> str:
+    """
+    Get all variables for a specific environment (with secrets masked).
+    """
+    env = variable_store.get_environment(env_name)
+    if not env:
+        return json.dumps({"error": f"Environment '{env_name}' not found"})
+
+    vars_masked = variable_store.get_all_variables(environment=env_name, mask_secrets=True)
+
+    result = {
+        "name": env.name,
+        "description": env.description,
+        "variables": vars_masked or {}
+    }
+
+    return json.dumps(result, indent=2)
+
+
+# =============================================================================
+# Discovery Tools
+# =============================================================================
+
+
+@mcp.tool()
+def get_api_context(
+    collection: str | None = None,
+    include_history: bool = False
+) -> dict[str, Any]:
+    """
+    Get complete context about available APIs and configuration.
+
+    **CALL THIS FIRST** when asked to work with any API. This tool provides:
+    - All configured environments and their variables (secrets masked)
+    - All collections and their available requests
+    - Active environment
+    - Recent API calls (if include_history=True)
+
+    This gives you everything needed to call APIs without trial-and-error.
+
+    Args:
+        collection: Optional - Get detailed schema for a specific collection
+        include_history: Whether to include recent API calls
+
+    Returns:
+        Complete context including environments, collections, and optionally history
+
+    Example:
+        # Get full context
+        get_api_context()
+
+        # Get detailed schema for Anthropic API collection
+        get_api_context(collection="Anthropic API")
+    """
+    environments = variable_store.list_environments()
+    active_env = variable_store.get_active_environment()
+    collections = collection_store.list_collections()
+
+    context = {
+        "active_environment": active_env,
+        "environments": {},
+        "collections": {},
+    }
+
+    # Get all environments with variables
+    for env_name in environments:
+        env = variable_store.get_environment(env_name)
+        if env:
+            vars_masked = variable_store.get_all_variables(environment=env_name, mask_secrets=True)
+            context["environments"][env_name] = {
+                "description": env.description,
+                "variables": vars_masked or {},
+                "is_active": env_name == active_env
+            }
+
+    # Get all collections
+    for coll_name in collections:
+        coll = collection_store.get_collection(coll_name)
+        if coll:
+            coll_data = {
+                "description": coll.description,
+                "base_url": coll.base_url,
+                "requests": {}
+            }
+
+            # If this is the requested collection or no specific collection, include details
+            if collection is None or collection == coll_name:
+                for folder in coll.folders:
+                    for req_ref in folder.requests:
+                        req = collection_store.get_request(coll_name, req_ref)
+                        if req:
+                            coll_data["requests"][req.name] = {
+                                "method": req.method.value,
+                                "url": req.url,
+                                "headers": req.headers,
+                                "body_type": req.body_type.value if req.body_type else None,
+                                "auth_type": req.auth.type.value if req.auth else "none",
+                                "folder": folder.name
+                            }
+            else:
+                # Just count requests for other collections
+                request_count = sum(len(folder.requests) for folder in coll.folders)
+                coll_data["request_count"] = request_count
+
+            context["collections"][coll_name] = coll_data
+
+    # Add recent history if requested
+    if include_history:
+        # Get recent entries synchronously
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context but can't await here
+                context["history"] = "(history unavailable in sync context)"
+            else:
+                history = loop.run_until_complete(
+                    history_manager.list_entries(limit=10)
+                )
+                context["recent_requests"] = [
+                    {
+                        "method": entry.get("method"),
+                        "url": entry.get("url"),
+                        "status": entry.get("status"),
+                        "timestamp": entry.get("timestamp")
+                    }
+                    for entry in history.get("entries", [])
+                ]
+        except Exception:
+            context["recent_requests"] = []
+
+    # Add helpful hints from config (with active_env substitution)
+    hints = {}
+    for key, value in _hints_config.items():
+        if isinstance(value, str):
+            # Substitute {active_env} in hint strings
+            hints[key] = value.replace("{active_env}", str(active_env))
+        else:
+            # Keep non-string values (like examples dict) as-is
+            hints[key] = value
+
+    context["hints"] = hints
+
+    return context
 
 
 # =============================================================================
@@ -88,6 +634,9 @@ async def request_send(
     environment: str | None = None,
     variable_overrides: dict[str, str] | None = None,
     response_format: str = "concise",
+    stream: bool = False,
+    save_to_file: str | bool | None = None,
+    save_format: str = "json",
 ) -> dict[str, Any]:
     """
     Send an HTTP request and receive the response.
@@ -109,9 +658,14 @@ async def request_send(
             Overrides take precedence over environment/collection/global variables.
             Example: {"model": "claude-3-opus", "prompt": "Custom prompt"}
         response_format: 'concise' (default) or 'detailed'.
+        stream: Enable streaming for SSE/LLM APIs. Captures all events and final response.
+        save_to_file: Save request/response to file. Pass filename or True for auto-generated.
+        save_format: Format for saved file: json, yaml, markdown, har (default: json).
 
     Returns:
         Response with status, body, duration. Detailed includes headers/cookies.
+        When stream=True, includes 'streaming' key with events array.
+        When save_to_file is set, includes 'saved_to' and 'saved_format' keys.
     """
     # Build auth config
     auth = None
@@ -145,6 +699,7 @@ async def request_send(
         environment=environment,
         variable_overrides=variable_overrides or {},
         response_format=ResponseFormat(response_format),
+        stream=stream,
     )
 
     result = await http_client.send_request(input_data)
@@ -160,6 +715,37 @@ async def request_send(
         request_body=body,
         response_body=result.body,
     )
+
+    # Save to file if requested
+    if save_to_file:
+        request_data = {
+            "method": method.upper(),
+            "url": url,
+            "headers": headers or {},
+            "body": body,
+        }
+        response_data = result.model_dump(exclude_none=True)
+
+        try:
+            save_result = _save_request_response_to_file(
+                request_data,
+                response_data,
+                save_to_file,
+                save_format,
+                environment,
+            )
+
+            # Add save info to response
+            result_dict = result.model_dump(exclude_none=True)
+            result_dict["saved_to"] = save_result["saved_to"]
+            result_dict["saved_format"] = save_result["format"]
+            return result_dict
+
+        except Exception as e:
+            # If save fails, still return response but with error
+            result_dict = result.model_dump(exclude_none=True)
+            result_dict["save_error"] = f"Failed to save file: {str(e)}"
+            return result_dict
 
     return result.model_dump(exclude_none=True)
 
@@ -312,12 +898,15 @@ def env_list(
 ) -> dict[str, Any]:
     """
     List environments and optionally their variables.
-    
+
+    **TIP**: Use get_api_context() instead for a complete overview of
+    environments, collections, and available APIs in one call.
+
     Args:
         show_variables: Whether to include variable values
         environment: Specific environment to show, or all
         mask_secrets: Whether to mask secret values (default true)
-    
+
     Returns:
         List of environments with optional variables
     """
@@ -397,11 +986,14 @@ def collection_list(
 ) -> dict[str, Any]:
     """
     List available collections.
-    
+
+    **TIP**: Use get_api_context() instead for a complete overview including
+    collection details, environment variables, and request schemas.
+
     Args:
         filter_term: Optional search term to filter collections
         response_format: 'names', 'summary', or 'detailed'
-    
+
     Returns:
         List of collections matching the filter
     """

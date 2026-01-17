@@ -191,6 +191,7 @@ class RequestSendInput(BaseModel):
     )
     response_format: ResponseFormat = ResponseFormat.CONCISE
     max_response_size: int = Field(default=25000, description="Max response tokens")
+    stream: bool = Field(default=False, description="Enable streaming for SSE/LLM APIs")
 
 
 class RequestSendOutput(BaseModel):
@@ -212,6 +213,12 @@ class RequestSendOutput(BaseModel):
     # Metadata
     truncated: bool = False
     truncation_message: str | None = None
+
+    # Streaming data (when stream=True)
+    streaming: dict[str, Any] | None = Field(
+        default=None,
+        description="Streaming events and metadata (events, event_count, timings)"
+    )
 
 
 class RequestInspectInput(BaseModel):

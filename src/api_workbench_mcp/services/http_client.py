@@ -84,23 +84,99 @@ class HttpClient:
 
         # Execute request
         timeout = input_data.timeout / 1000.0  # Convert to seconds
-        
+
         start_time = time.monotonic()
-        
+
         async with httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=input_data.follow_redirects,
             verify=input_data.validate_ssl,
         ) as client:
             try:
-                response = await client.request(
-                    method=input_data.method.value,
-                    url=url,
-                    headers=headers,
-                    content=body if isinstance(body, (str, bytes)) else None,
-                    json=body if isinstance(body, dict) and input_data.body_type == BodyType.JSON else None,
-                    data=body if isinstance(body, dict) and input_data.body_type == BodyType.FORM else None,
-                )
+                # Handle streaming requests
+                if input_data.stream:
+                    streaming_events: list[str] = []
+                    accumulated_text = ""
+                    first_chunk_time: int | None = None
+                    last_chunk_time: int | None = None
+
+                    async with client.stream(
+                        method=input_data.method.value,
+                        url=url,
+                        headers=headers,
+                        content=body if isinstance(body, (str, bytes)) else None,
+                        json=body if isinstance(body, dict) and input_data.body_type == BodyType.JSON else None,
+                        data=body if isinstance(body, dict) and input_data.body_type == BodyType.FORM else None,
+                    ) as response:
+                        async for chunk in response.aiter_text():
+                            chunk_time = int((time.monotonic() - start_time) * 1000)
+                            if first_chunk_time is None:
+                                first_chunk_time = chunk_time
+                            last_chunk_time = chunk_time
+
+                            streaming_events.append(chunk)
+                            accumulated_text += chunk
+
+                    duration = int((time.monotonic() - start_time) * 1000)
+
+                    # Try to parse accumulated response as JSON
+                    try:
+                        parsed_body = json.loads(accumulated_text)
+                    except (json.JSONDecodeError, ValueError):
+                        parsed_body = accumulated_text
+
+                    # Build response data with streaming info
+                    response_data = ResponseData(
+                        status=response.status_code,
+                        status_text=response.reason_phrase or "",
+                        headers=dict(response.headers),
+                        body=parsed_body,
+                        raw_body=accumulated_text,
+                        cookies=dict(response.cookies),
+                        duration=duration,
+                        size=len(accumulated_text.encode('utf-8')),
+                        redirects=[],
+                    )
+
+                    # Add streaming metadata
+                    streaming_metadata = {
+                        "events": streaming_events,
+                        "event_count": len(streaming_events),
+                        "first_chunk_time_ms": first_chunk_time or 0,
+                        "last_chunk_time_ms": last_chunk_time or 0,
+                    }
+
+                    output = self._format_output(
+                        response_data,
+                        input_data.response_format,
+                        input_data.max_response_size,
+                    )
+                    output.streaming = streaming_metadata
+                    return output
+
+                else:
+                    # Non-streaming request (original behavior)
+                    response = await client.request(
+                        method=input_data.method.value,
+                        url=url,
+                        headers=headers,
+                        content=body if isinstance(body, (str, bytes)) else None,
+                        json=body if isinstance(body, dict) and input_data.body_type == BodyType.JSON else None,
+                        data=body if isinstance(body, dict) and input_data.body_type == BodyType.FORM else None,
+                    )
+
+                    duration = int((time.monotonic() - start_time) * 1000)
+
+                    # Parse response
+                    response_data = self._parse_response(response, duration)
+
+                    # Format output
+                    return self._format_output(
+                        response_data,
+                        input_data.response_format,
+                        input_data.max_response_size,
+                    )
+
             except httpx.TimeoutException:
                 return RequestSendOutput(
                     status=0,
@@ -115,18 +191,6 @@ class HttpClient:
                     duration=int((time.monotonic() - start_time) * 1000),
                     body={"error": str(e)},
                 )
-
-        duration = int((time.monotonic() - start_time) * 1000)
-
-        # Parse response
-        response_data = self._parse_response(response, duration)
-
-        # Format output
-        return self._format_output(
-            response_data,
-            input_data.response_format,
-            input_data.max_response_size,
-        )
 
     def inspect_request(
         self,
