@@ -1,0 +1,55 @@
+# API Workbench MCP - Context Hints Configuration
+# These hints are shown when calling get_api_context() to guide Claude Desktop
+
+# General API usage hints
+calling_apis: "Use request_send with method, url, headers, and body. Variables like {{apiKey}} are substituted from active environment."
+
+# Environment management hints
+environments: "Active environment is '{active_env}'. Switch with env_switch(name='env_name')."
+
+# Collection usage hints
+collections: "Use collection requests by name or create new requests with request_send."
+
+# Authentication patterns
+authentication: "Most APIs use headers like 'x-api-key' or 'Authorization: Bearer {{token}}'"
+
+# Variable overrides (NEW - for flexible per-request changes)
+variable_overrides: "Use variable_overrides to change model, prompt, or any variable per-request without modifying environment. Example: variable_overrides={'model': 'claude-opus-4.5', 'prompt': 'Your question'}"
+
+# Streaming support (NEW)
+streaming: "For LLM APIs, use stream=True to capture all SSE events. Combine with save_to_file to debug streaming responses."
+
+# Saving responses (NEW)
+saving_files: "Use save_to_file=True or save_to_file='filename.json' to export request/response. Supports formats: json, yaml, markdown, har."
+
+# Discovery tip (NEW)
+discovery: "Call get_api_context() first when working with APIs to see all available collections, environments, and request schemas."
+
+# Common LLM patterns (NEW)
+llm_usage: |
+  For calling multiple LLM models in parallel:
+  1. Use get_api_context() to see available API keys
+  2. Use request_send with variable_overrides for each model
+  3. Set save_to_file to capture all responses for comparison
+
+# Quick examples (NEW)
+examples:
+  anthropic: |
+    request_send(
+      method="POST",
+      url="{{anthropic_base_url}}/messages",
+      headers={"x-api-key": "{{anthropic_api_key}}", "anthropic-version": "2023-06-01"},
+      body={"model": "{{model}}", "max_tokens": 4096, "messages": [{"role": "user", "content": "{{prompt}}"}]},
+      variable_overrides={"model": "claude-opus-4.5", "prompt": "Your question"},
+      save_to_file=True
+    )
+
+  openai: |
+    request_send(
+      method="POST",
+      url="{{openai_base_url}}/chat/completions",
+      headers={"Authorization": "Bearer {{openai_api_key}}"},
+      body={"model": "{{model}}", "max_tokens": 4096, "messages": [{"role": "user", "content": "{{prompt}}"}]},
+      variable_overrides={"model": "gpt-4o", "prompt": "Your question"},
+      save_to_file=True
+    )
